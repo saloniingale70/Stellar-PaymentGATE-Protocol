@@ -2,18 +2,18 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype,
-    token, Env, Symbol, Address, Vec
+    token, Env, Symbol, Address, Vec,
 };
 
 #[derive(Clone)]
 #[contracttype]
 pub struct Deal {
-    pub depositor: Address,
-    pub beneficiary: Address,
-    pub asset: Address,
+    pub depositor:     Address,
+    pub beneficiary:   Address,
+    pub asset:         Address,
     pub locked_amount: i128,
-    pub checkpoints: Vec<bool>,
-    pub disbursed: i128,
+    pub checkpoints:   Vec<bool>,
+    pub disbursed:     i128,
 }
 
 #[contract]
@@ -127,5 +127,98 @@ impl PaymentGate {
 
     pub fn get_deal(env: Env, deal_id: Symbol) -> Deal {
         env.storage().instance().get(&deal_id).unwrap()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::{
+        testutils::Address as _,
+        token::{Client as TokenClient, StellarAssetClient},
+        Address, Env, Symbol,
+    };
+
+    fn setup(env: &Env) -> (PaymentGateClient<'_>, Address, Address, Address, TokenClient<'_>) {
+        env.mock_all_auths();
+
+        let depositor   = Address::generate(env);
+        let beneficiary = Address::generate(env);
+        let admin       = Address::generate(env);
+
+        let contract_id = env.register(PaymentGate, ());
+        let client      = PaymentGateClient::new(env, &contract_id);
+
+        let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+        StellarAssetClient::new(env, &token_id.address()).mint(&depositor, &1_000_000_000i128);
+        let tc = TokenClient::new(env, &token_id.address());
+
+        (client, token_id.address(), depositor, beneficiary, tc)
+    }
+
+    // Test 1 — open_deal locks funds inside the contract
+    #[test]
+    fn open_deal_locks_funds() {
+        let env = Env::default();
+        let (client, token, depositor, beneficiary, tc) = setup(&env);
+        let id = Symbol::new(&env, "deal1");
+
+        client.open_deal(&id, &depositor, &beneficiary, &token, &3_000_000i128, &3u32);
+
+        // Depositor debited, contract credited
+        assert_eq!(tc.balance(&depositor),      1_000_000_000 - 3_000_000);
+        assert_eq!(tc.balance(&client.address), 3_000_000);
+
+        // State initialised correctly
+        let deal = client.get_deal(&id);
+        assert_eq!(deal.locked_amount, 3_000_000);
+        assert_eq!(deal.disbursed,     0);
+        for i in 0..deal.checkpoints.len() {
+            assert!(!deal.checkpoints.get(i).unwrap());
+        }
+    }
+
+    #[test]
+    fn approve_and_withdraw_releases_proportional_funds() {
+        let env = Env::default();
+        let (client, token, depositor, beneficiary, tc) = setup(&env);
+        let id = Symbol::new(&env, "deal2");
+
+        client.open_deal(&id, &depositor, &beneficiary, &token, &9_000_000i128, &3u32);
+
+      
+        client.approve_checkpoint(&id, &0u32);
+        client.withdraw(&id);
+        assert_eq!(tc.balance(&beneficiary),    3_000_000);
+        assert_eq!(client.get_deal(&id).disbursed, 3_000_000);
+
+       
+        client.approve_checkpoint(&id, &1u32);
+        client.withdraw(&id);
+        assert_eq!(tc.balance(&beneficiary), 6_000_000);
+
+        client.approve_checkpoint(&id, &2u32);
+        client.withdraw(&id);
+        assert_eq!(tc.balance(&beneficiary),    9_000_000);
+        assert_eq!(tc.balance(&client.address), 0);
+    }
+
+    #[test]
+    fn void_deal_refunds_remainder_to_depositor() {
+        let env = Env::default();
+        let (client, token, depositor, beneficiary, tc) = setup(&env);
+        let id = Symbol::new(&env, "deal3");
+
+        client.open_deal(&id, &depositor, &beneficiary, &token, &6_000_000i128, &3u32);
+
+        client.approve_checkpoint(&id, &0u32);
+        client.withdraw(&id);
+        assert_eq!(tc.balance(&beneficiary), 2_000_000);
+
+        let depositor_snapshot = tc.balance(&depositor);
+
+        client.void_deal(&id);
+        assert_eq!(tc.balance(&depositor),      depositor_snapshot + 4_000_000);
+        assert_eq!(tc.balance(&client.address), 0);
     }
 }

@@ -17,7 +17,6 @@ function fmt(val) { return (Number(val) / 1e7).toFixed(2); }
 function shortAddr(addr) { if (!addr) return ""; return addr.slice(0, 6) + "…" + addr.slice(-4); }
 function shortContract(id) { if (!id) return ""; return id.slice(0, 8) + "…" + id.slice(-6); }
 
-// ── Icons ─────────────────────────────────────────────────────────────────────
 const IcoLock = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
@@ -89,7 +88,7 @@ function Notification({ items }) {
   );
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+
 export default function App() {
   const [view, setView] = useState("new");
   const [walletAddr, setWalletAddr] = useState(null);
